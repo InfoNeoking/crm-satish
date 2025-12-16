@@ -13,7 +13,6 @@ def connect_gsheets():
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
-    # Carrega os segredos do arquivo secrets.toml
     secrets_dict = dict(st.secrets["connections"]["gsheets"])
     creds = Credentials.from_service_account_info(secrets_dict, scopes=scopes)
     client = gspread.authorize(creds)
@@ -22,7 +21,6 @@ def connect_gsheets():
 
 def load_data():
     sheet = connect_gsheets()
-    # Pega todos os registros para manter o índice original (essencial para edição)
     data = sheet.get_all_records()
     df = pd.DataFrame(data)
     return df
@@ -30,12 +28,10 @@ def load_data():
 try:
     df = load_data()
 except Exception as e:
-    st.error("Erro de Conexão. Por favor verifique o secrets.toml")
+    st.error("Connection Error. Please check secrets.toml")
     st.stop()
 
 # --- MAPEAMENTO DE COLUNAS ---
-# Interno: Deve bater exatamente com os cabeçalhos do Google Sheets (Português)
-# Visual: O que o Satish vê na tela (Inglês)
 COL_STATUS = "Ativo/Morno/Frio"  
 COL_TRADER = "Trader"            
 COL_POD = "POD"                  
@@ -45,12 +41,10 @@ COL_NOME = "Nome"
 COL_EMAIL = "Email Client"       
 COL_ZAP = "Whatsapp Cliente"     
 
-# Garante que a coluna Status existe no DataFrame
 if COL_STATUS not in df.columns:
     df[COL_STATUS] = None
 
 # --- LISTAS GLOBAIS ---
-# 1. PODs (Portos)
 PODS_DEFAULT = [
     "Abidjan – Costa do Marfim", "Aden - Yemen", "Alexandria - Egito", "Algeciras - Espanha",
     "Algiers - Argelia", "Altamira - México", "Apapa – Nigéria", "Aqaba - Jordânia",
@@ -78,11 +72,10 @@ PODS_DEFAULT = [
     "Willemstad - Curacao", "Zamzibar – Tânzania"
 ]
 
-# 2. Produtos
 PRODUCTS_LIST = ["Beef", "Chicken", "Hen", "Pork", "Fish", "Lamb", "Mutton", "Turkey", "Duck"]
 
-# --- INTERFACE DO APP ---
-st.title("📱 Satish CRM")
+# --- INTERFACE ---
+st.title(" Satish CRM")
 tab_search, tab_add = st.tabs(["🔍 Search & Edit", "➕ New Client"])
 
 # ==========================================
@@ -92,16 +85,13 @@ with tab_search:
     with st.expander("Show Filters", expanded=False):
         c1, c2 = st.columns(2)
         
-        # Filtro de POD
         current_pods = df[COL_POD].dropna().unique().tolist()
         all_pods = sorted(list(set(PODS_DEFAULT + current_pods)))
         filter_pod = c1.selectbox("Port (POD)", ["All"] + all_pods)
         
-        # Filtro de Status
         filter_status = c2.selectbox("Status", ["All", "Ativo", "Morno", "Frio", "supplier"])
         search_text = st.text_input("Search by Name or Company")
 
-    # Lógica de Filtragem
     df_filtered = df.copy()
     
     if filter_pod != "All":
@@ -122,7 +112,6 @@ with tab_search:
         with st.container(border=True):
             col_top_a, col_top_b = st.columns([3, 1])
             
-            # Cores do Status
             status_val = str(row[COL_STATUS]) if pd.notna(row[COL_STATUS]) else "-"
             color = "gray"
             if "Ativo" in status_val: color = "red"
@@ -138,28 +127,36 @@ with tab_search:
             if pd.notna(row[COL_PRODUTO]) and row[COL_PRODUTO]:
                 st.code(f"{row[COL_PRODUTO]}", language="text")
             
-            # Botão do WhatsApp
+            # --- ÁREA DE CONTATO (Botões lado a lado) ---
+            c_zap, c_mail = st.columns(2)
+            
+            # 1. Botão WhatsApp
             tel = str(row[COL_ZAP])
             tel_clean = ''.join(filter(str.isdigit, tel))
             if tel_clean:
-                st.link_button(" WhatsApp", f"https://wa.me/{tel_clean}", use_container_width=True)
+                c_zap.link_button("💬 WhatsApp", f"https://wa.me/{tel_clean}", use_container_width=True)
+            else:
+                c_zap.button("💬 No Number", disabled=True, use_container_width=True)
 
-            # --- SEÇÃO DE EDIÇÃO ---
+            # 2. Botão Email (NOVO)
+            email_val = str(row[COL_EMAIL]) if pd.notna(row[COL_EMAIL]) else ""
+            if email_val and "@" in email_val:
+                # 'mailto:' abre o app de email padrão
+                c_mail.link_button("📧 Email", f"mailto:{email_val.strip()}", use_container_width=True)
+            else:
+                c_mail.button("📧 No Email", disabled=True, use_container_width=True)
+
+            # --- EDIÇÃO ---
             with st.expander("✎ Edit Details"):
                 with st.form(f"edit_form_{index}"):
                     st.write("Update Client Information:")
                     
-                    # 1. Status
                     edit_status = st.select_slider("Status", options=["Frio", "Morno", "Ativo", "supplier"], value=status_val if status_val in ["Frio", "Morno", "Ativo", "supplier"] else "Frio")
                     
-                    # 2. Produtos (Lógica de Multi-seleção na edição)
-                    # Prepara lista dos produtos atuais deste cliente
                     current_prods_list = []
                     if pd.notna(row[COL_PRODUTO]) and row[COL_PRODUTO]:
-                        # Separa a string "Beef | Chicken" em uma lista ["Beef", "Chicken"]
                         current_prods_list = [p.strip() for p in str(row[COL_PRODUTO]).split("|")]
                     
-                    # Garante que todos os produtos atuais estejam na lista de opções para evitar erros
                     edit_prod_options = sorted(list(set(PRODUCTS_LIST + current_prods_list)))
                     
                     edit_products = st.multiselect(
@@ -168,9 +165,12 @@ with tab_search:
                         default=[p for p in current_prods_list if p in edit_prod_options]
                     )
 
-                    # 3. Outros campos
                     edit_empresa = st.text_input("Company", value=row[COL_EMPRESA])
                     edit_nome = st.text_input("Contact Name", value=row[COL_NOME])
+                    
+                    # Email também editável
+                    edit_email = st.text_input("Email", value=row[COL_EMAIL])
+                    
                     edit_pod = st.selectbox("POD", options=["Keep Current"] + all_pods, index=0)
                     edit_zap = st.text_input("WhatsApp", value=row[COL_ZAP])
                     
@@ -179,30 +179,28 @@ with tab_search:
                     if update_btn:
                         try:
                             sheet = connect_gsheets()
-                            # Calcula o número real da linha (Index do DataFrame + 2 por causa do cabeçalho)
                             row_num = index + 2
                             
-                            # Decide qual POD salvar
                             pod_to_save = row[COL_POD] if edit_pod == "Keep Current" else edit_pod
-                            # Junta a lista de volta em String
                             str_products_final = " | ".join(edit_products) 
                             
-                            # Atualiza células específicas (Colunas A, C, D, E, F, H)
-                            sheet.update_cell(row_num, 1, edit_status)      # Col A: Status
-                            sheet.update_cell(row_num, 3, pod_to_save)      # Col C: POD
-                            sheet.update_cell(row_num, 4, str_products_final) # Col D: Product
-                            sheet.update_cell(row_num, 5, edit_empresa)     # Col E: Empresa
-                            sheet.update_cell(row_num, 6, edit_nome)        # Col F: Nome
-                            sheet.update_cell(row_num, 8, edit_zap)         # Col H: Zap
+                            # Atualiza colunas: A, C, D, E, F, G (Email), H
+                            sheet.update_cell(row_num, 1, edit_status)      
+                            sheet.update_cell(row_num, 3, pod_to_save)      
+                            sheet.update_cell(row_num, 4, str_products_final) 
+                            sheet.update_cell(row_num, 5, edit_empresa)     
+                            sheet.update_cell(row_num, 6, edit_nome)
+                            sheet.update_cell(row_num, 7, edit_email) # Col G: Email
+                            sheet.update_cell(row_num, 8, edit_zap)         
                             
                             st.success("Client Updated! Please refresh.")
-                            st.cache_resource.clear() # Limpa o cache para mostrar mudanças
+                            st.cache_resource.clear()
                             
                         except Exception as e:
                             st.error(f"Error updating: {e}")
 
 # ==========================================
-# ABA 2: ADICIONAR NOVO CLIENTE
+# ABA 2: NOVO CLIENTE
 # ==========================================
 with tab_add:
     st.write("Add a new client to database:")
@@ -217,7 +215,6 @@ with tab_add:
         
         st.divider()
         st.write("**POD / Location:**")
-        # Lógica para adicionar POD customizado
         current_pods_add = df[COL_POD].dropna().unique().tolist()
         options_pod_add = sorted(list(set(PODS_DEFAULT + current_pods_add)))
         final_options = ["➕ Other (Type New)..."] + options_pod_add
@@ -231,8 +228,6 @@ with tab_add:
         
         st.divider()
         st.write("**Products of Interest:**")
-        
-        # Usando checkboxes aqui (mais fácil para entrada mobile)
         cols = st.columns(3)
         selected_prods = []
         for i, p in enumerate(PRODUCTS_LIST):
@@ -256,16 +251,9 @@ with tab_add:
                 st.error("Please type the new Port name.")
             else:
                 try:
-                    # Prepara nova linha
                     new_row = [
-                        new_status,     # A
-                        "Satish",       # B (Fixo)
-                        pod_final,      # C
-                        str_prods,      # D
-                        new_company,    # E
-                        new_name,       # F
-                        new_email,      # G
-                        new_zap         # H
+                        new_status, "Satish", pod_final, str_prods, 
+                        new_company, new_name, new_email, new_zap
                     ]
                     
                     sheet = connect_gsheets()
