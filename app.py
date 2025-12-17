@@ -2,17 +2,58 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
+from PIL import Image
+from google import genai
+import json
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
+# Configuração da página
 st.set_page_config(page_title="Satish CRM", layout="centered")
 
-# --- CONEXÃO COM GOOGLE SHEETS ---
+def ler_cartao_com_ia(image_file):
+    try:
+        # Verifica se a chave existe
+        if "api" not in st.secrets or "gemini" not in st.secrets["api"]:
+            st.error("AI Key not found in secrets.toml")
+            return None
+
+        api_key = st.secrets["api"]["gemini"]
+        
+        # Cria o cliente da nova biblioteca
+        client = genai.Client(api_key=api_key)
+        
+        img = Image.open(image_file)
+        
+        prompt = """
+        Analise esta imagem de cartão de visita. Extraia os dados em formato JSON estrito:
+        {
+            "nome": "Nome da pessoa",
+            "empresa": "Nome da empresa",
+            "email": "O email principal",
+            "telefone": "O telefone principal (com código do país se houver)",
+            "cargo": "O cargo da pessoa"
+        }
+        Se não encontrar algum campo, deixe como string vazia "". Responda APENAS o JSON, sem markdown.
+        """
+        
+        # Chamada atualizada para a nova SDK
+        response = client.models.generate_content(
+            model='gemini-2.5-flash-lite',
+            contents=[prompt, img]
+        )
+        
+        # Tratamento da resposta
+        texto_limpo = response.text.replace("```json", "").replace("```", "").strip()
+        dados = json.loads(texto_limpo)
+        return dados
+
+    except Exception as e:
+        st.error(f"AI Error: {e}")
+        return None
+
+# Conexão Google Sheets
 @st.cache_resource
 def connect_gsheets():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     secrets_dict = dict(st.secrets["connections"]["gsheets"])
     creds = Credentials.from_service_account_info(secrets_dict, scopes=scopes)
     client = gspread.authorize(creds)
@@ -27,24 +68,21 @@ def load_data():
 
 try:
     df = load_data()
-except Exception as e:
-    st.error("Connection Error. Please check secrets.toml")
+except:
     st.stop()
 
-# --- MAPEAMENTO DE COLUNAS ---
-COL_STATUS = "Ativo/Morno/Frio"  
-COL_TRADER = "Trader"            
-COL_POD = "POD"                  
-COL_PRODUTO = "Product"          
-COL_EMPRESA = "Empresa"          
-COL_NOME = "Nome"                
-COL_EMAIL = "Email Client"       
-COL_ZAP = "Whatsapp Cliente"     
+# Mapeamento de Colunas
+COL_STATUS = "Ativo/Morno/Frio"
+COL_POD = "POD"
+COL_EMPRESA = "Empresa"
+COL_NOME = "Nome"
+COL_EMAIL = "Email Client"
+COL_ZAP = "Whatsapp Cliente"
+COL_PRODUTO = "Product"
 
-if COL_STATUS not in df.columns:
-    df[COL_STATUS] = None
+if COL_STATUS not in df.columns: df[COL_STATUS] = None
 
-# --- LISTAS GLOBAIS ---
+# Listas de Dados
 PODS_DEFAULT = [
     "Abidjan – Costa do Marfim", "Aden - Yemen", "Alexandria - Egito", "Algeciras - Espanha",
     "Algiers - Argelia", "Altamira - México", "Apapa – Nigéria", "Aqaba - Jordânia",
@@ -71,35 +109,35 @@ PODS_DEFAULT = [
     "Veracruz - México", "Victoria - Seychelles", "Vladivostok - Russia", "Walvis Bay – Namíbia",
     "Willemstad - Curacao", "Zamzibar – Tânzania"
 ]
-
 PRODUCTS_LIST = ["Beef", "Chicken", "Hen", "Pork", "Fish", "Lamb", "Mutton", "Turkey", "Duck"]
+STATUS_OPTIONS = ["Frio", "Morno", "Ativo", "supplier"]
 
-# --- INTERFACE ---
-st.title(" Satish CRM")
-tab_search, tab_add = st.tabs(["🔍 Search & Edit", "➕ New Client"])
+# Interface Principal
+st.title("Satish CRM")
 
-# ==========================================
-# ABA 1: BUSCA E EDIÇÃO
-# ==========================================
-with tab_search:
+# Menu de navegação
+view_option = st.radio(
+    "Menu:", 
+    ["Search & Edit", "New Client"], 
+    horizontal=True,
+    label_visibility="collapsed"
+)
+
+st.divider()
+
+# --- ABA 1: BUSCA E EDIÇÃO ---
+if view_option == "Search & Edit":
     with st.expander("Show Filters", expanded=False):
         c1, c2 = st.columns(2)
-        
         current_pods = df[COL_POD].dropna().unique().tolist()
         all_pods = sorted(list(set(PODS_DEFAULT + current_pods)))
         filter_pod = c1.selectbox("Port (POD)", ["All"] + all_pods)
-        
-        filter_status = c2.selectbox("Status", ["All", "Ativo", "Morno", "Frio", "supplier"])
+        filter_status = c2.selectbox("Status", ["All"] + STATUS_OPTIONS)
         search_text = st.text_input("Search by Name or Company")
 
     df_filtered = df.copy()
-    
-    if filter_pod != "All":
-        df_filtered = df_filtered[df_filtered[COL_POD] == filter_pod]
-        
-    if filter_status != "All":
-        df_filtered = df_filtered[df_filtered[COL_STATUS] == filter_status]
-        
+    if filter_pod != "All": df_filtered = df_filtered[df_filtered[COL_POD] == filter_pod]
+    if filter_status != "All": df_filtered = df_filtered[df_filtered[COL_STATUS] == filter_status]
     if search_text:
         df_filtered = df_filtered[
             df_filtered[COL_EMPRESA].str.contains(search_text, case=False, na=False) |
@@ -111,7 +149,6 @@ with tab_search:
     for index, row in df_filtered.iterrows():
         with st.container(border=True):
             col_top_a, col_top_b = st.columns([3, 1])
-            
             status_val = str(row[COL_STATUS]) if pd.notna(row[COL_STATUS]) else "-"
             color = "gray"
             if "Ativo" in status_val: color = "red"
@@ -121,145 +158,116 @@ with tab_search:
             
             col_top_a.write(f"**{row[COL_EMPRESA]}**")
             col_top_b.markdown(f":{color}[**{status_val}**]")
+            st.caption(f"Contact: {row[COL_NOME]} | Port: {row[COL_POD]}")
             
-            st.caption(f"👤 {row[COL_NOME]} | 📍 {row[COL_POD]}")
+            if pd.notna(row[COL_PRODUTO]) and row[COL_PRODUTO]: st.code(f"{row[COL_PRODUTO]}", language="text")
             
-            if pd.notna(row[COL_PRODUTO]) and row[COL_PRODUTO]:
-                st.code(f"{row[COL_PRODUTO]}", language="text")
-            
-            # --- ÁREA DE CONTATO (Botões lado a lado) ---
             c_zap, c_mail = st.columns(2)
+            tel = ''.join(filter(str.isdigit, str(row[COL_ZAP])))
+            if tel: c_zap.link_button("WhatsApp", f"https://wa.me/{tel}", use_container_width=True)
+            else: c_zap.button("No Number", disabled=True, use_container_width=True, key=f"no_zap_{index}")
             
-            # 1. Botão WhatsApp
-            tel = str(row[COL_ZAP])
-            tel_clean = ''.join(filter(str.isdigit, tel))
-            if tel_clean:
-                c_zap.link_button("💬 WhatsApp", f"https://wa.me/{tel_clean}", use_container_width=True)
-            else:
-                c_zap.button("💬 No Number", disabled=True, use_container_width=True)
-
-            # 2. Botão Email (NOVO)
             email_val = str(row[COL_EMAIL]) if pd.notna(row[COL_EMAIL]) else ""
-            if email_val and "@" in email_val:
-                # 'mailto:' abre o app de email padrão
-                c_mail.link_button("📧 Email", f"mailto:{email_val.strip()}", use_container_width=True)
-            else:
-                c_mail.button("📧 No Email", disabled=True, use_container_width=True)
+            if "@" in email_val: c_mail.link_button("Email", f"mailto:{email_val.strip()}", use_container_width=True)
+            else: c_mail.button("No Email", disabled=True, use_container_width=True, key=f"no_email_{index}")
 
-            # --- EDIÇÃO ---
-            with st.expander("✎ Edit Details"):
+            with st.expander("Edit Details"):
                 with st.form(f"edit_form_{index}"):
-                    st.write("Update Client Information:")
-                    
-                    edit_status = st.select_slider("Status", options=["Frio", "Morno", "Ativo", "supplier"], value=status_val if status_val in ["Frio", "Morno", "Ativo", "supplier"] else "Frio")
+                    edit_status = st.selectbox("Status", options=STATUS_OPTIONS, index=STATUS_OPTIONS.index(status_val) if status_val in STATUS_OPTIONS else 0)
+                    edit_empresa = st.text_input("Company", value=row[COL_EMPRESA])
+                    edit_nome = st.text_input("Contact Name", value=row[COL_NOME])
+                    edit_email = st.text_input("Email", value=row[COL_EMAIL])
                     
                     current_prods_list = []
                     if pd.notna(row[COL_PRODUTO]) and row[COL_PRODUTO]:
                         current_prods_list = [p.strip() for p in str(row[COL_PRODUTO]).split("|")]
-                    
                     edit_prod_options = sorted(list(set(PRODUCTS_LIST + current_prods_list)))
-                    
-                    edit_products = st.multiselect(
-                        "Products", 
-                        options=edit_prod_options, 
-                        default=[p for p in current_prods_list if p in edit_prod_options]
-                    )
-
-                    edit_empresa = st.text_input("Company", value=row[COL_EMPRESA])
-                    edit_nome = st.text_input("Contact Name", value=row[COL_NOME])
-                    
-                    # Email também editável
-                    edit_email = st.text_input("Email", value=row[COL_EMAIL])
+                    edit_products = st.multiselect("Products", options=edit_prod_options, default=[p for p in current_prods_list if p in edit_prod_options])
                     
                     edit_pod = st.selectbox("POD", options=["Keep Current"] + all_pods, index=0)
                     edit_zap = st.text_input("WhatsApp", value=row[COL_ZAP])
                     
-                    update_btn = st.form_submit_button("Update Client")
-                    
-                    if update_btn:
+                    if st.form_submit_button("Update Client"):
                         try:
                             sheet = connect_gsheets()
                             row_num = index + 2
-                            
-                            pod_to_save = row[COL_POD] if edit_pod == "Keep Current" else edit_pod
-                            str_products_final = " | ".join(edit_products) 
-                            
-                            # Atualiza colunas: A, C, D, E, F, G (Email), H
-                            sheet.update_cell(row_num, 1, edit_status)      
-                            sheet.update_cell(row_num, 3, pod_to_save)      
-                            sheet.update_cell(row_num, 4, str_products_final) 
-                            sheet.update_cell(row_num, 5, edit_empresa)     
+                            pod_save = row[COL_POD] if edit_pod == "Keep Current" else edit_pod
+                            str_products_final = " | ".join(edit_products)
+                            sheet.update_cell(row_num, 1, edit_status)
+                            sheet.update_cell(row_num, 3, pod_save)
+                            sheet.update_cell(row_num, 4, str_products_final)
+                            sheet.update_cell(row_num, 5, edit_empresa)
                             sheet.update_cell(row_num, 6, edit_nome)
-                            sheet.update_cell(row_num, 7, edit_email) # Col G: Email
-                            sheet.update_cell(row_num, 8, edit_zap)         
-                            
-                            st.success("Client Updated! Please refresh.")
-                            st.cache_resource.clear()
-                            
-                        except Exception as e:
-                            st.error(f"Error updating: {e}")
+                            sheet.update_cell(row_num, 7, edit_email)
+                            sheet.update_cell(row_num, 8, edit_zap)
+                            st.success("Updated!"); st.cache_resource.clear()
+                        except Exception as e: st.error(f"Error updating: {e}")
 
-# ==========================================
-# ABA 2: NOVO CLIENTE
-# ==========================================
-with tab_add:
-    st.write("Add a new client to database:")
+# --- ABA 2: NOVO CLIENTE (IA) ---
+elif view_option == "New Client":
+    st.write("Add a new client:")
+
+    st.info("Tip: Take a photo of the business card to auto-fill details.")
+    card_photo = st.camera_input("Take a photo")
+    
+    if 'ai_data' not in st.session_state:
+        st.session_state.ai_data = {}
+    
+    if card_photo:
+        bytes_data = card_photo.getvalue()
+        if st.session_state.ai_data.get('last_photo_bytes') != bytes_data:
+            with st.spinner("AI is reading the card..."):
+                dados = ler_cartao_com_ia(card_photo)
+                if dados:
+                    st.session_state.ai_data = dados
+                    st.session_state.ai_data['last_photo_bytes'] = bytes_data
+                    st.success("Card read successfully!")
+    
+    ai_vals = st.session_state.ai_data
     
     with st.form("add_form", clear_on_submit=True):
-        st.write("**Status (Level):**")
-        new_status = st.select_slider(
-            "Select Status:",
-            options=["Frio", "Morno", "Ativo", "supplier"],
-            value="Ativo"
-        )
+        st.write("**Status:**")
+        new_status = st.selectbox("Select Status:", options=STATUS_OPTIONS, index=2)
         
         st.divider()
         st.write("**POD / Location:**")
         current_pods_add = df[COL_POD].dropna().unique().tolist()
         options_pod_add = sorted(list(set(PODS_DEFAULT + current_pods_add)))
-        final_options = ["➕ Other (Type New)..."] + options_pod_add
+        final_options = ["Other (Type New)..."] + options_pod_add
         
         choice_pod = st.selectbox("Select Port:", options=final_options)
-        
         pod_final = choice_pod
-        if choice_pod == "➕ Other (Type New)...":
-            pod_typed = st.text_input("Type new Port/Country:", placeholder="e.g. Santos - Brazil")
+        if choice_pod == "Other (Type New)...":
+            pod_typed = st.text_input("Type new Port/Country:")
             pod_final = pod_typed
         
         st.divider()
-        st.write("**Products of Interest:**")
+        st.write("**Products:**")
         cols = st.columns(3)
         selected_prods = []
         for i, p in enumerate(PRODUCTS_LIST):
-            if cols[i % 3].checkbox(p):
-                selected_prods.append(p)
+            if cols[i % 3].checkbox(p): selected_prods.append(p)
         
         st.divider()
-        new_company = st.text_input("Company Name")
-        new_name = st.text_input("Contact Name")
-        new_email = st.text_input("Email")
-        new_zap = st.text_input("WhatsApp (with Country Code)")
+        # Campos preenchidos pela IA
+        new_company = st.text_input("Company Name", value=ai_vals.get("empresa", ""))
+        new_name = st.text_input("Contact Name", value=ai_vals.get("nome", ""))
+        new_email = st.text_input("Email", value=ai_vals.get("email", ""))
+        new_zap = st.text_input("WhatsApp", value=ai_vals.get("telefone", ""))
         
-        submit_btn = st.form_submit_button("💾 Save to Sheet", type="primary")
-        
-        if submit_btn:
+        if st.form_submit_button("Save to Sheet", type="primary"):
             str_prods = " | ".join(selected_prods)
-            
-            if not new_company:
-                st.error("Company Name is required!")
-            elif choice_pod == "➕ Other (Type New)..." and not pod_typed:
-                st.error("Please type the new Port name.")
+            if not new_company: st.error("Company Name is required!")
             else:
                 try:
                     new_row = [
                         new_status, "Satish", pod_final, str_prods, 
                         new_company, new_name, new_email, new_zap
                     ]
-                    
                     sheet = connect_gsheets()
                     sheet.append_row(new_row)
-                    st.toast(f"Saved! {new_company} added.", icon="✅")
-                    st.cache_resource.clear() 
+                    st.toast(f"Saved! {new_company} added.")
                     
-                except Exception as e:
-                    st.error(f"Error saving: {e}")
+                    st.session_state.ai_data = {}
+                    st.cache_resource.clear() 
+                except Exception as e: st.error(f"Error: {e}")
