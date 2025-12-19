@@ -5,22 +5,51 @@ from google.oauth2.service_account import Credentials
 from PIL import Image
 from google import genai
 import json
+import time
 
 # Configuração da página
 st.set_page_config(page_title="Satish CRM", layout="centered")
 
+# --- SISTEMA DE LOGIN ---
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+
+def check_login():
+    email = st.session_state["input_email"].strip().lower()
+    password = st.session_state["input_password"]
+    
+    # Validação: Email deve terminar com @neokingfoods.com e senha deve ser 123456
+    if email.endswith("@neokingfoods.com") and password == "123456":
+        st.session_state["logged_in"] = True
+        st.success("Login authorized")
+        time.sleep(0.5)
+        st.rerun()
+    else:
+        st.error("Access Denied. Use a Neo King Foods email.")
+
+if not st.session_state["logged_in"]:
+    st.title("Neo King Foods CRM")
+    st.write("Please log in to access the system.")
+    
+    st.text_input("Email", key="input_email", placeholder="name@neokingfoods.com")
+    st.text_input("Password", type="password", key="input_password")
+    
+    st.button("Login", on_click=check_login, type="primary")
+    st.stop() # Para a execução do código aqui se não estiver logado
+
+# ========================================================
+# DAQUI PARA BAIXO É O CÓDIGO DO CRM (SÓ RODA SE LOGADO)
+# ========================================================
+
+# Função: Ler cartão com IA
 def ler_cartao_com_ia(image_file):
     try:
-        # Verifica se a chave existe
         if "api" not in st.secrets or "gemini" not in st.secrets["api"]:
             st.error("AI Key not found in secrets.toml")
             return None
 
         api_key = st.secrets["api"]["gemini"]
-        
-        # Cria o cliente da nova biblioteca
         client = genai.Client(api_key=api_key)
-        
         img = Image.open(image_file)
         
         prompt = """
@@ -35,13 +64,11 @@ def ler_cartao_com_ia(image_file):
         Se não encontrar algum campo, deixe como string vazia "". Responda APENAS o JSON, sem markdown.
         """
         
-        # Chamada atualizada para a nova SDK
         response = client.models.generate_content(
             model='gemini-2.5-flash-lite',
             contents=[prompt, img]
         )
         
-        # Tratamento da resposta
         texto_limpo = response.text.replace("```json", "").replace("```", "").strip()
         dados = json.loads(texto_limpo)
         return dados
@@ -112,8 +139,11 @@ PODS_DEFAULT = [
 PRODUCTS_LIST = ["Beef", "Chicken", "Hen", "Pork", "Fish", "Lamb", "Mutton", "Turkey", "Duck"]
 STATUS_OPTIONS = ["Frio", "Morno", "Ativo", "supplier"]
 
-# Interface Principal
+# Interface Principal (Só aparece se passar do login)
 st.title("Satish CRM")
+if st.button("Logout", type="secondary"):
+    st.session_state["logged_in"] = False
+    st.rerun()
 
 # Menu de navegação
 view_option = st.radio(
